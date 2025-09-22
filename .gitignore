@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+*.pkl
+.Python
+env/
+venv/
+.venv/
+.pkl
+pip-log.txt
