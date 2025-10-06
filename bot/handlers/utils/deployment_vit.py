@@ -11,24 +11,57 @@ import pickle
 from torchvision import transforms
 
 
-class TripletNet(nn.Module):
-    def __init__(self, base_model_name='vit_base_patch16_224', embedding_dim=128):
-        super(TripletNet, self).__init__()
-        self.base_model = timm.create_model(base_model_name, pretrained=False)
+class EnhancedTripletNet(nn.Module):
+    def __init__(self, base_model_name='vit_base_patch16_224', embedding_dim=512, dropout_rate=0.4):
+        super(EnhancedTripletNet, self).__init__()
+        self.base_model = timm.create_model(base_model_name, pretrained=True)
         in_features = self.base_model.head.in_features
         self.base_model.head = nn.Identity()
-        self.embedding = nn.Linear(in_features, embedding_dim)
+
+        # Сеть эмбеддингов
+        self.embedding = nn.Sequential(
+            nn.Dropout(dropout_rate),
+            nn.Linear(in_features, 1024),
+            nn.BatchNorm1d(1024),
+            nn.GELU(),
+
+            nn.Dropout(dropout_rate),
+            nn.Linear(1024, 512),
+            nn.BatchNorm1d(512),
+            nn.GELU(),
+
+            nn.Dropout(dropout_rate/2),
+            nn.Linear(512, embedding_dim),
+        )
+
+        self._init_weights()
+
+    def _init_weights(self):
+        """Инициализация весов"""
+        for module in self.embedding.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
 
     def forward(self, x):
         features = self.base_model(x)
         embeddings = self.embedding(features)
-        return nn.functional.normalize(embeddings, p=2, dim=1)
-
+        embeddings = nn.functional.normalize(embeddings, p=2, dim=1)
+        return embeddings
 
 def load_model(model_path, device):
-    model = TripletNet()
+    """Загрузка модели"""
+    model = EnhancedTripletNet(base_model_name='vit_base_patch16_224', embedding_dim=512)
     state_dict = torch.load(model_path, map_location=device)
-    model.load_state_dict(state_dict)
+
+    model_state_dict = model.state_dict()
+    filtered_state_dict = {}
+    for k, v in state_dict.items():
+        if k in model_state_dict and v.shape == model_state_dict[k].shape:
+            filtered_state_dict[k] = v
+
+    model.load_state_dict(filtered_state_dict, strict=False)
     model.to(device)
     model.eval()
     return model

@@ -5,6 +5,7 @@ __pycache__/
 *.env
 *.pkl
 .Python
+.env
 env/
 venv/
 .venv/

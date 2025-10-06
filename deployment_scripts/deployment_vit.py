@@ -145,7 +145,7 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
 if __name__ == "__main__":
     # Конфигурация путей
     MODEL_PATH = "C:/Users/User/PycharmProjects/Tritons/best_model_2.pth" #путь до параметров модели (best_model.pth)
-    DATABASE_DIR = "C:/Users/User/Documents/cropp_dataset" #путь до базы (уже обрезанные после yolo)
+    DATABASE_DIR = "C:/Users/User/Documents/crop_dataset" #путь до базы (уже обрезанные после yolo)
     QUERY_IMAGE = "C:/Users/User/Documents/IMG_9453_27_karelin.JPG" #Изображение, которое ищем
     OUTPUT_DIR = "C:/Users/User/Documents/Triton_results"  # Папка с результатом
     DEVICE = torch.device('cuda' if torch.cuda.is_available() else 'cpu')

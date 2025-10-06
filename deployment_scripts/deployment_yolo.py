@@ -190,7 +190,7 @@ def get_keypoints_from_model(img_path):
 
 
 input_dir = r"C:/Users/User/Documents/triton_id"  #папка с изображением, которое ищем
-output_dir = r"C:/Users/User/Documents/cropp_dataset"  #путь сохранения обрезанных фотографий (то же самое в модели vit)
+output_dir = r"C:/Users/User/Documents/crop_dataset"  #путь сохранения обрезанных фотографий (то же самое в модели vit)
 os.makedirs(output_dir, exist_ok=True)
 
 seg_model_path = r"C:/Users/User/PycharmProjects/Tritons/best_seg.pt"  #параметры модели сегментации
