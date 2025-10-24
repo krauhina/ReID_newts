@@ -155,7 +155,7 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
                 similarity = 1 - distances[idx]  # Косинусная схожесть
                 similarity_percent = similarity * 100
 
-                class_string = 'Ребристый' if class_name == 'ribbed' else "Карелина"
+                class_string = 'Ребристый' if class_name == 'ribbed_triton' else "Карелина"
                 res_str = f"{i}. Класс: {class_string} | Особь: {individual} | Схожесть: {similarity_percent:.1f}%\n"
                 file.write(res_str)
                 print(f"{i}. Класс: {class_name} | Особь: {individual} | Схожесть: {similarity_percent:.1f}% | Путь: {src_path}")
