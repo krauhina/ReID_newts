@@ -3,11 +3,9 @@ __pycache__/
 *.pyo
 *.pyd
 *.env
-*.pkl
 .Python
 .env
 env/
 venv/
 .venv/
-.pkl
 pip-log.txt
