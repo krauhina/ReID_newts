@@ -12,6 +12,9 @@ from torchvision import transforms
 
 
 class EnhancedTripletNet(nn.Module):
+    """
+    VIT модель
+    """
     def __init__(self, base_model_name='vit_base_patch16_224', embedding_dim=512, dropout_rate=0.4):
         super(EnhancedTripletNet, self).__init__()
         self.base_model = timm.create_model(base_model_name, pretrained=True)
@@ -68,6 +71,9 @@ def load_model(model_path, device):
 
 
 def get_embedding(image_path, model, transform, device):
+    """
+    получение эмбедингов
+    """
     try:
         image = Image.open(image_path).convert('RGB')
         image = transform(image).unsqueeze(0).to(device)
@@ -80,23 +86,41 @@ def get_embedding(image_path, model, transform, device):
 
 
 def compute_distances(embeddings1, embedding2):
+    """
+    вычисление косинусного расстояния
+    """
     similarities = cosine_similarity(embeddings1, embedding2.reshape(1, -1))
     return 1 - similarities.flatten()
 
 
 def save_embeddings(embeddings, paths, save_path):
+    """сохранение эмбедингов в бызу данных database_embeddings.pkl"""
     with open(save_path, 'wb') as f:
         pickle.dump({'embeddings': embeddings, 'paths': paths}, f)
 
 
 def load_embeddings(save_path):
+    """загрузка эмбеддингов из базы данных"""
     with open(save_path, 'rb') as f:
         data = pickle.load(f)
     return data['embeddings'], data['paths']
 
 
 def find_similar_images(model_path, database_dir, query_image_path, output_dir, transform, device, bot):
+    """
+    основная функция поиска похожих изображений по косинусной схожести
+
+    Процесс:
+    1)Загрузка/вычисление эмбеддингов базы данных
+    2)Получение эмбеддинга запросного изображения
+    3)Вычисление схожести и выбор топ-5 результатов
+    4.Сохранение результатов и метаинформации
+
+    """
+    # путь для эмбеддингов базы данных
     embeddings_save_path = os.path.join(database_dir, 'database_embeddings.pkl')
+
+    # проверка существования эмбеддингов
     if os.path.exists(embeddings_save_path):
         print("Загрузка сохраненных эмбеддингов...")
         database_embeddings, database_image_paths = load_embeddings(embeddings_save_path)
@@ -104,8 +128,10 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
         print("Вычисление эмбеддингов базы...")
         model = load_model(model_path, device)
 
+        # сбор всех путей к изображениям в базе данных
         database_image_paths = []
         for root, _, files in os.walk(database_dir):
+            # пропускаем директорию результатов, если она внутри базы данных
             if os.path.normpath(root).startswith(os.path.normpath(output_dir)):
                 continue
 
@@ -117,6 +143,7 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
 
         print(f"Найдено {len(database_image_paths)} изображений в базе")
 
+        # вычисление эмбеддингов для всей базы данных
         database_embeddings = []
         valid_paths = []
         for path in tqdm(database_image_paths, desc="Обработка базы"):
@@ -126,22 +153,26 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
                 valid_paths.append(path)
 
         database_embeddings = np.array(database_embeddings)
+        # сохранение эмбеддингов для будущего использования
         save_embeddings(database_embeddings, valid_paths, embeddings_save_path)
         print(f"Эмбеддинги сохранены в {embeddings_save_path}")
         database_image_paths = valid_paths
 
+    # загрузка модели и получение эмбеддинга запросного изображения
     model = load_model(model_path, device)
     query_embedding = get_embedding(query_image_path, model, transform, device)
     if query_embedding is None:
         print("Не удалось обработать запросное изображение")
         return
 
+    # вычисление расстояний и выбор топ-5 результатов
     distances = compute_distances(np.array(database_embeddings), query_embedding)
-    top5_idx = np.argsort(distances)[:bot.size_answer]
+    top5_idx = np.argsort(distances)[:bot.size_answer]  # bot.size_answer обычно = 5
 
     print("\n=== Топ-5 результатов ===")
     os.makedirs(output_dir, exist_ok=True)
 
+    # сохранение результатов и копирование изображений
     with open(output_dir + "/res.txt", 'w', encoding='utf-8') as file:
         for i, idx in enumerate(top5_idx, 1):
             src_path = database_image_paths[idx]
@@ -149,16 +180,25 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
             dst_path = os.path.join(output_dir, dst_filename)
 
             try:
+                # копирование изображения в директорию результатов
                 shutil.copy(src_path, dst_path)
+
+                # извлечение метаинформации из пути
                 class_name = os.path.basename(os.path.dirname(os.path.dirname(src_path)))
                 individual = os.path.basename(os.path.dirname(src_path))
+
+                # расчет процента схожести
                 similarity = 1 - distances[idx]  # Косинусная схожесть
                 similarity_percent = similarity * 100
 
+                # преобразование имени класса в читаемый формат
                 class_string = 'Ребристый' if class_name == 'ribbed_triton' else "Карелина"
+
+                # формирование строки результата
                 res_str = f"{i}. Класс: {class_string} | Особь: {individual} | Схожесть: {similarity_percent:.1f}%\n"
                 file.write(res_str)
-                print(f"{i}. Класс: {class_name} | Особь: {individual} | Схожесть: {similarity_percent:.1f}% | Путь: {src_path}")
+                print(
+                    f"{i}. Класс: {class_name} | Особь: {individual} | Схожесть: {similarity_percent:.1f}% | Путь: {src_path}")
             except Exception as e:
                 print(f"Ошибка копирования файла {src_path}: {str(e)}")
         print(f"\nРезультаты сохранены в: {output_dir}")
