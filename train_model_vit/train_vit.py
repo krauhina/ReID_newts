@@ -470,7 +470,6 @@ def get_enhanced_transforms():
     train_transforms = transforms.Compose([
         transforms.Resize(256),
         transforms.RandomCrop(224),
-        transforms.RandomHorizontalFlip(p=0.5),
         transforms.RandomRotation(15),
         transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
         transforms.RandomGrayscale(p=0.1),
@@ -896,3 +895,4 @@ def train_and_evaluate():
 
 if __name__ == "__main__":
     history, model, species_mapping = train_and_evaluate()
+
