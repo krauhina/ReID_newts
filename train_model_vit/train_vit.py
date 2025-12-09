@@ -9,12 +9,16 @@ import pandas as pd
 import numpy as np
 import timm
 from sklearn.metrics.pairwise import pairwise_distances
+from transformers import get_cosine_schedule_with_warmup
 from sklearn.manifold import TSNE
 import umap
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import math
 import random
+
+
+# было несоотвествие расчета расстояний на этапе обучения и оценке метркики (евклидовое и косинусное - заменить на косинусное) + архивирован ресайз и рандом кроп, флипов нет
 
 class EnhancedTripletNet(nn.Module):
     def __init__(self, base_model_name='vit_base_patch16_224', embedding_dim=512, dropout_rate=0.4):
@@ -97,7 +101,8 @@ class IndividualCenterLoss(nn.Module):
         self.num_individuals = num_unique_individuals
         self.feat_dim = feat_dim
         self.lambda_ic = lambda_ic
-        self.individual_centers = nn.Parameter(torch.randn(num_unique_individuals, feat_dim))
+        centers = torch.randn(num_unique_individuals, feat_dim)
+        self.individual_centers = nn.Parameter(F.normalize(centers, p=2, dim=1))
 
     def forward(self, x, individual_labels):
         batch_size = x.size(0)
@@ -105,11 +110,13 @@ class IndividualCenterLoss(nn.Module):
             self.individual_centers.data = self.individual_centers.data.to(x.device)
 
         centers_batch = self.individual_centers[individual_labels]
-        loss = torch.mean(torch.sum(torch.pow(x - centers_batch, 2), dim=1))
+
+        cos_sim = F.cosine_similarity(x, centers_batch, dim=1)
+        loss = 1 - cos_sim.mean()
         return self.lambda_ic * loss
 
     def update_centers(self, x, individual_labels, alpha=0.5):
-        """Обновление центров особей"""
+        """Обновление центров особей с нормализацией"""
         with torch.no_grad():
             if self.individual_centers.device != x.device:
                 self.individual_centers.data = self.individual_centers.data.to(x.device)
@@ -117,10 +124,12 @@ class IndividualCenterLoss(nn.Module):
             for i in range(self.num_individuals):
                 mask = (individual_labels == i)
                 if mask.sum() > 0:
-                    self.individual_centers.data[i] = alpha * self.individual_centers.data[i] + \
-                                                     (1 - alpha) * x[mask].mean(dim=0)
+                    new_center = alpha * self.individual_centers.data[i] + \
+                                 (1 - alpha) * x[mask].mean(dim=0)
+                    # Нормализуем новый центр
+                    self.individual_centers.data[i] = F.normalize(new_center.unsqueeze(0), p=2, dim=1).squeeze(0)
 
-class ProgressiveTripletDataset(Dataset):
+class ProgressiveTripletDataset(Dataset): #train(прогрессивная сложность, обновление кэша эмбедингов)
     def __init__(self, df, species_mapping, transform=None, hard_mining=True):
         self.df = df.reset_index(drop=True)
         self.transform = transform
@@ -148,7 +157,7 @@ class ProgressiveTripletDataset(Dataset):
 
     def update_phase(self, epoch, total_epochs):
         """Обновляет фазу сложности в зависимости от эпохи"""
-        phase_boundaries = [total_epochs * 0.3, total_epochs * 0.6]
+        phase_boundaries = [total_epochs * 0.2, total_epochs * 0.5]
 
         if epoch < phase_boundaries[0]:
             new_phase = 0
@@ -182,7 +191,7 @@ class ProgressiveTripletDataset(Dataset):
                 embeddings.append(embed.cpu().numpy())
 
         self.embeddings_cache = np.vstack(embeddings)
-        self.distance_cache = pairwise_distances(self.embeddings_cache, metric='euclidean')
+        self.distance_cache = pairwise_distances(self.embeddings_cache, metric='cosine')
         print(f"Кэш эмбеддингов обновлен: {self.embeddings_cache.shape}")
 
     def __len__(self):
@@ -254,7 +263,7 @@ class ProgressiveTripletDataset(Dataset):
 
 class AdaptiveMultiLossFunction(nn.Module):
     def __init__(self, species_mapping, num_epochs, num_individuals,
-                 easy_margin=0.1, medium_margin=0.3, hard_margin=0.5):
+                 easy_margin=0.05, medium_margin=0.15, hard_margin=0.25):
         super().__init__()
 
         self.species_mapping = species_mapping
@@ -273,14 +282,14 @@ class AdaptiveMultiLossFunction(nn.Module):
         )
 
         self.phase_weights = {
-            0: {'triplet': 1.0, 'contrast': 0.3, 'center': 0.4},
-            1: {'triplet': 1.2, 'contrast': 0.5, 'center': 0.6},
-            2: {'triplet': 1.5, 'contrast': 0.7, 'center': 0.8}
+            0: {'triplet': 1.0, 'contrast': 0.1, 'center': 0.3},
+            1: {'triplet': 1.2, 'contrast': 0.2, 'center': 0.5},
+            2: {'triplet': 1.5, 'contrast': 0.3, 'center': 0.8}
         }
 
     def get_current_phase(self, epoch):
         """Определяет текущую фазу обучения"""
-        phase_boundaries = [self.num_epochs * 0.3, self.num_epochs * 0.6]
+        phase_boundaries = [self.num_epochs * 0.2, self.num_epochs * 0.5]
 
         if epoch < phase_boundaries[0]:
             return 0, 'easy'
@@ -350,7 +359,7 @@ class AdaptiveMultiLossFunction(nn.Module):
 
         return loss.mean()
 
-class EnhancedTripletDataset(Dataset):
+class EnhancedTripletDataset(Dataset): #для валидации (фиксированная сложность,без апдейта фаз)
     def __init__(self, df, species_mapping, transform=None, hard_mining=True, intra_species_neg_prob=0.7):
         self.df = df.reset_index(drop=True)
         self.transform = transform
@@ -388,7 +397,7 @@ class EnhancedTripletDataset(Dataset):
                 embeddings.append(embed.cpu().numpy())
 
         self.embeddings_cache = np.vstack(embeddings)
-        self.distance_cache = pairwise_distances(self.embeddings_cache, metric='euclidean')
+        self.distance_cache = pairwise_distances(self.embeddings_cache, metric='cosine')
         print(f"Кэш эмбеддингов обновлен: {self.embeddings_cache.shape}")
 
     def __len__(self):
@@ -468,16 +477,12 @@ class TestDataset(Dataset):
 def get_enhanced_transforms():
     """Аугментации для тренировки"""
     train_transforms = transforms.Compose([
-        transforms.Resize(256),
-        transforms.RandomCrop(224),
-        transforms.RandomRotation(15),
-        transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.1),
+        transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.05),
         transforms.RandomGrayscale(p=0.1),
-        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 2.0)),
+        transforms.GaussianBlur(kernel_size=3, sigma=(0.1, 0.5)),
         transforms.RandomAdjustSharpness(sharpness_factor=2, p=0.3),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        transforms.RandomErasing(p=0.2, scale=(0.02, 0.2), ratio=(0.3, 3.3)),
     ])
     return train_transforms
 
@@ -485,7 +490,6 @@ def create_unified_species_mapping(df_train, df_val, df_test):
     """Создает маппинг для числовых class_id -> species_id"""
     species_mapping = {}
 
-    # Создаем составные идентификаторы
     for df in [df_train, df_val, df_test]:
         df['unique_individual'] = df['class_name'] + '_' + df['individual_name']
 
@@ -671,19 +675,17 @@ def train_and_evaluate():
     batch_size = 16
     num_epochs = 30
 
-   
-    df_train = pd.read_csv("/content/drive/MyDrive/tritons_dataset_1/labels_train_colab.csv")
-    df_val = pd.read_csv("/content/drive/MyDrive/tritons_dataset_1/labels_val_colab.csv")
-    df_test = pd.read_csv("/content/drive/MyDrive/tritons_dataset_1/labels_test_colab.csv")
+
+    df_train = pd.read_csv("/content/drive/MyDrive/TRITONS-PROJECT/clean_crop_dataset_train/labels_train.csv")
+    df_val = pd.read_csv("/content/drive/MyDrive/TRITONS-PROJECT/clean_crop_dataset_train/labels_val.csv")
+    df_test = pd.read_csv("/content/drive/MyDrive/TRITONS-PROJECT/clean_crop_dataset_train/labels_test.csv")
 
     for df in [df_train, df_val, df_test]:
         df['individual_name'] = df['individual_name'].astype(str)
         df['unique_individual'] = df['class_name'] + '_' + df['individual_name']
 
-    # Создаем единый маппинг для всех данных
     species_mapping = create_unified_species_mapping(df_train, df_val, df_test)
 
-    # Создаем общий маппинг для составных идентификаторов
     all_individuals = pd.concat([df_train, df_val, df_test])['unique_individual'].unique()
     individual_to_idx = {ind: idx for idx, ind in enumerate(all_individuals)}
 
@@ -701,7 +703,7 @@ def train_and_evaluate():
     print(f"Всего уникальных особей (вид_особь): {num_unique_individuals}")
     print(f"Примеры особей: {list(all_individuals[:10])}")
 
-    
+
     train_dataset = ProgressiveTripletDataset(
         df_train_individual,
         species_mapping=species_mapping,
@@ -729,27 +731,30 @@ def train_and_evaluate():
     val_loader = DataLoader(val_dataset, batch_size=batch_size, num_workers=4)
     test_loader = DataLoader(test_dataset, batch_size=batch_size, num_workers=4)
 
-   
+
     model = EnhancedTripletNet().to(device)
 
     criterion = AdaptiveMultiLossFunction(
         species_mapping=species_mapping,
         num_epochs=num_epochs,
         num_individuals=num_unique_individuals,
-        easy_margin=0.1,
+        easy_margin=0.1,      
         medium_margin=0.3,
         hard_margin=0.5
     ).to(device)
 
-    optimizer = optim.AdamW([
-        {'params': model.base_model.parameters(), 'lr': 2e-5/5},
-        {'params': model.embedding.parameters(), 'lr': 2e-5},
-        {'params': model.projection.parameters(), 'lr': 2e-5},
-        {'params': criterion.individual_center_loss.parameters(), 'lr': 2e-5/10}
-    ], weight_decay=1e-4, betas=(0.9, 0.999))
+    #Упрощенный оптимизатор с единым LR
+    optimizer = optim.AdamW(
+        model.parameters(),  # Все параметры вместе
+        lr=2e-5,            # Стандартный LR для fine-tuning
+        weight_decay=1e-4,
+        betas=(0.9, 0.999)
+    )
 
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        optimizer, T_0=10, T_mult=2, eta_min=1e-7
+    scheduler = get_cosine_schedule_with_warmup(
+        optimizer,
+        num_warmup_steps=3 * len(train_loader),  # 3 эпохи warmup
+        num_training_steps=num_epochs * len(train_loader)
     )
 
     history = {
@@ -806,7 +811,7 @@ def train_and_evaluate():
             train_center_loss += center_loss.item()
             phase_counts[difficulty] += 1
 
-        
+
         num_batches = len(train_loader)
         history['train_loss'].append(train_loss / num_batches)
         history['train_triplet_loss'].append(train_triplet_loss / num_batches)
@@ -844,7 +849,7 @@ def train_and_evaluate():
         val_metrics = evaluate_model(model, val_loader, device, epoch + 1, 'val')
         history['val_metrics'].append(val_metrics)
 
-        
+
         print(f"\nЭпоха {epoch + 1}/{num_epochs}")
         print(f"Train Loss: {history['train_loss'][-1]:.4f} | Val Loss: {history['val_loss'][-1]:.4f}")
         print(f"Triplet: {history['train_triplet_loss'][-1]:.4f} | Contrast: {history['train_contrast_loss'][-1]:.4f}")
@@ -855,7 +860,7 @@ def train_and_evaluate():
         print(f"  Pos/Neg Ratio: {val_metrics['pos_neg_ratio']:.4f}")
         print(f"  Precision@1: {val_metrics['precision@1']:.4f} | Precision@5: {val_metrics['precision@5']:.4f}")
 
-        
+
         total_triplets = sum(phase_counts.values())
         print(f"Сложность триплетов: "
               f"Легкие {phase_counts['easy']/total_triplets*100:.1f}%, "
@@ -863,23 +868,23 @@ def train_and_evaluate():
 
         # Сохранение лучшей модели
         if epoch == 0 or val_metrics['pos_neg_ratio'] < min([m['pos_neg_ratio'] for m in history['val_metrics'][:epoch+1]]):
-            torch.save(model.state_dict(), 'progressive_best_model.pth')
+            torch.save(model.state_dict(), 'github_model.pth')
             print(" Сохранена новая лучшая модель")
 
-    
+
     print("\nФинальное тестирование...")
-    model.load_state_dict(torch.load('progressive_best_model.pth', map_location=device))
+    model.load_state_dict(torch.load('github_model.pth', map_location=device))
 
     test_metrics = evaluate_model(model, test_loader, device, mode='test')
     history['test_metrics'] = test_metrics
 
-    
+
     print("\nВизуализация эмбеддингов...")
     embeddings, species_labels, individual_labels = visualize_embeddings_with_individuals(
         model, test_loader, device, species_mapping, method='all'
     )
 
-    
+
     print("\n" + "="*50)
     print("ФИНАЛЬНЫЕ РЕЗУЛЬТАТЫ ТЕСТИРОВАНИЯ")
     print("="*50)
@@ -891,8 +896,4 @@ def train_and_evaluate():
     print(f"Precision@5: {test_metrics['precision@5']:.4f}")
 
     return history, model, species_mapping
-
-
-if __name__ == "__main__":
-    history, model, species_mapping = train_and_evaluate()
 
