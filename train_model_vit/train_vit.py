@@ -176,8 +176,6 @@ class ProgressiveTripletDataset(Dataset): #train(прогрессивная сл
         embeddings = []
 
         basic_transforms = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
@@ -382,8 +380,6 @@ class EnhancedTripletDataset(Dataset): #для валидации (фиксир�
         embeddings = []
 
         basic_transforms = transforms.Compose([
-            transforms.Resize(256),
-            transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
         ])
@@ -712,8 +708,6 @@ def train_and_evaluate():
     )
 
     basic_transforms = transforms.Compose([
-        transforms.Resize(256),
-        transforms.CenterCrop(224),
         transforms.ToTensor(),
         transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
     ])
@@ -896,4 +890,5 @@ def train_and_evaluate():
     print(f"Precision@5: {test_metrics['precision@5']:.4f}")
 
     return history, model, species_mapping
+
 
