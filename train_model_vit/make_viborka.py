@@ -3,8 +3,8 @@ import shutil
 import random
 
 # Параметры
-source_dir = r'C:/Users/User/Documents/tritons_dataset/Augmented_triton_dataset/augmented_ribbed'  # замените на путь к папке с особями
-dest_dir = r'C:/Users/User/Documents/tritons_dataset'   # куда создавать train, val, test
+source_dir = r'C:/Users/User/Documents/cropp_dataset/karelin_triton'  # замените на путь к папке с особями
+dest_dir = r'C:/Users/User/Documents/tritons_dataset_1'   # куда создавать train, val, test
 
 train_ratio = 0.6
 val_ratio = 0.2
@@ -28,14 +28,14 @@ val_persons = persons[train_end:val_end]
 test_persons = persons[val_end:]
 
 def copy_persons(person_list, target_folder):
-    for особь in person_list:
-        src_особь_path = os.path.join(source_dir, особь)
-        dst_особь_path = os.path.join(dest_dir, target_folder, особь)
-        os.makedirs(dst_особь_path, exist_ok=True)
+    for individual in person_list:
+        src_individual_path = os.path.join(source_dir, individual)
+        dst_individual_path = os.path.join(dest_dir, target_folder, individual)
+        os.makedirs(dst_individual_path, exist_ok=True)
 
-        for фото in os.listdir(src_особь_path):
-            src_file = os.path.join(src_особь_path, фото)
-            dst_file = os.path.join(dst_особь_path, фото)
+        for photo in os.listdir(src_individual_path):
+            src_file = os.path.join(src_individual_path, photo)
+            dst_file = os.path.join(dst_individual_path, photo)
             shutil.copy2(src_file, dst_file)
 
 # Копируем файлы с сохранением структуры
