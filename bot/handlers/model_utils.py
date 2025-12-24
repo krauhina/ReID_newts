@@ -1,4 +1,5 @@
 import torch
+from scipy.conftest import devices
 from torchvision import transforms
 from bot.handlers.utils.deployment_yolo import process_single_image
 from bot.handlers.utils.deployment_vit import find_similar_images
@@ -30,7 +31,7 @@ async def photo_processing(bot):
             MODEL_PATH = "bot/models/best_model.pth"
 
             # Директория с базой данных изображений для поиска
-            DATABASE_DIR = "bot/crop_dataset"
+            DATABASE_DIR = "bot/dataset_crop"
 
             # Путь к обрезанному изображению от YOLO
             QUERY_IMAGE = f'{bot.save_dir}/image_cropped.jpg'
@@ -42,8 +43,7 @@ async def photo_processing(bot):
 
             # Трансформации для предобработки изображений
             TRANSFORMS = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
+                transforms.Resize((224,224)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225]),
@@ -59,6 +59,7 @@ async def photo_processing(bot):
                 transform=TRANSFORMS,
                 device=DEVICE,
                 bot=bot
+
             )
             return True
 

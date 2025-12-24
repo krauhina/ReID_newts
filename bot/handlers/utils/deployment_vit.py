@@ -6,22 +6,31 @@ import os
 from tqdm import tqdm
 import shutil
 import torch.nn as nn
+import torch.nn.functional as F
 import timm
 import pickle
 from torchvision import transforms
 
 
 class EnhancedTripletNet(nn.Module):
-    """
-    VIT модель
-    """
     def __init__(self, base_model_name='vit_base_patch16_224', embedding_dim=512, dropout_rate=0.4):
-        super(EnhancedTripletNet, self).__init__()
+        super().__init__()
         self.base_model = timm.create_model(base_model_name, pretrained=True)
         in_features = self.base_model.head.in_features
         self.base_model.head = nn.Identity()
 
-        # Сеть эмбеддингов
+        # Размораживаем слои
+        for param in self.base_model.parameters():
+            param.requires_grad = False
+
+        if hasattr(self.base_model, 'blocks'):
+            num_blocks = len(self.base_model.blocks)
+            blocks_to_unfreeze = min(6, num_blocks)
+            for i in range(num_blocks - blocks_to_unfreeze, num_blocks):
+                for param in self.base_model.blocks[i].parameters():
+                    param.requires_grad = True
+
+        # Эмбеддинг сеть
         self.embedding = nn.Sequential(
             nn.Dropout(dropout_rate),
             nn.Linear(in_features, 1024),
@@ -37,32 +46,60 @@ class EnhancedTripletNet(nn.Module):
             nn.Linear(512, embedding_dim),
         )
 
-        self._init_weights()
+        # Проекционная головка
+        self.projection = nn.Sequential(
+            nn.Linear(embedding_dim, 256),
+            nn.BatchNorm1d(256),
+            nn.GELU(),
+            nn.Linear(256, 128)
+        )
 
-    def _init_weights(self):
-        """Инициализация весов"""
+        # Инициализация весов
         for module in self.embedding.modules():
             if isinstance(module, nn.Linear):
                 nn.init.kaiming_normal_(module.weight, mode='fan_out', nonlinearity='relu')
                 if module.bias is not None:
                     nn.init.constant_(module.bias, 0)
 
-    def forward(self, x):
+        for module in self.projection.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.xavier_uniform_(module.weight)
+                if module.bias is not None:
+                    nn.init.constant_(module.bias, 0)
+
+    def forward(self, x, return_projection=False):
         features = self.base_model(x)
         embeddings = self.embedding(features)
-        embeddings = nn.functional.normalize(embeddings, p=2, dim=1)
+        embeddings = F.normalize(embeddings, p=2, dim=1)
+
+        if return_projection:
+            projections = self.projection(embeddings)
+            projections = F.normalize(projections, p=2, dim=1)
+            return embeddings, projections
+
         return embeddings
 
+
 def load_model(model_path, device):
-    """Загрузка модели"""
     model = EnhancedTripletNet(base_model_name='vit_base_patch16_224', embedding_dim=512)
-    state_dict = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device)
+
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        state_dict = checkpoint['model_state_dict']
+    else:
+        state_dict = checkpoint
 
     model_state_dict = model.state_dict()
     filtered_state_dict = {}
+
     for k, v in state_dict.items():
         if k in model_state_dict and v.shape == model_state_dict[k].shape:
-            filtered_state_dict[k] = v
+            if v.shape == model_state_dict[k].shape:
+                filtered_state_dict[k] = v
+            else:
+                print(f"Пропущен ключ {k}")
+        else:
+            print(f"Ключ {k} не найден в модели")
 
     model.load_state_dict(filtered_state_dict, strict=False)
     model.to(device)
@@ -106,6 +143,54 @@ def load_embeddings(save_path):
     return data['embeddings'], data['paths']
 
 
+def compute_database_embeddings(model, database_dir, transform, device, embeddings_save_path):
+    """
+    Вычисление эмбеддингов для всей базы данных
+    """
+    database_image_paths = []
+    for root, _, files in os.walk(database_dir):
+        # Пропускаем системные файлы
+        if any(x in root.lower() for x in ['__pycache__', '.git', 'results']):
+            continue
+
+        for file in files:
+            if file.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp', '.tiff')):
+                full_path = os.path.join(root, file)
+                if os.path.exists(full_path):
+                    database_image_paths.append(full_path)
+
+    print(f"Найдено {len(database_image_paths)} изображений в базе")
+
+    # Вычисление эмбеддингов
+    database_embeddings = []
+    valid_paths = []
+
+    for path in tqdm(database_image_paths, desc="Обработка базы"):
+        try:
+            image = Image.open(path).convert('RGB')
+            image = transform(image).unsqueeze(0).to(device)
+
+            with torch.no_grad():
+                embedding = model(image)
+
+            database_embeddings.append(embedding.cpu().numpy().flatten())
+            valid_paths.append(path)
+
+        except Exception as e:
+            print(f"⚠️ Ошибка обработки {path}: {str(e)}")
+
+    if not valid_paths:
+        raise ValueError("Не удалось обработать ни одно изображение из базы")
+
+    database_embeddings = np.array(database_embeddings)
+
+    # Сохраняем эмбеддинги
+    os.makedirs(os.path.dirname(embeddings_save_path), exist_ok=True)
+    save_embeddings(database_embeddings, valid_paths, embeddings_save_path)
+
+    return database_embeddings, valid_paths
+
+
 def find_similar_images(model_path, database_dir, query_image_path, output_dir, transform, device, bot):
     """
     основная функция поиска похожих изображений по косинусной схожести
@@ -118,7 +203,7 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
 
     """
     # путь для эмбеддингов базы данных
-    embeddings_save_path = os.path.join(database_dir, 'database_embeddings.pkl')
+    embeddings_save_path = 'bot/dataset_crop/database_embeddings.pkl'
 
     # проверка существования эмбеддингов
     if os.path.exists(embeddings_save_path):
@@ -192,7 +277,7 @@ def find_similar_images(model_path, database_dir, query_image_path, output_dir, 
                 similarity_percent = similarity * 100
 
                 # преобразование имени класса в читаемый формат
-                class_string = 'Ребристый' if class_name == 'ribbed_triton' else "Карелина"
+                class_string = 'Ребристый' if class_name.startswith('ribbed')  else "Карелина"
 
                 # формирование строки результата
                 res_str = f"{i}. Класс: {class_string} | Особь: {individual} | Схожесть: {similarity_percent:.1f}%\n"
